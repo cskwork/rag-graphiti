@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RAG Chatbot{% endblock %}</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            text-align: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            min-height: 400px;
+            margin-bottom: 20px;
+        }
+        .status {
+            text-align: center;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .status.error {
+            background-color: #ffebee;
+            color: #c62828;
+            border: 1px solid #e57373;
+        }
+        .status.success {
+            background-color: #e8f5e8;
+            color: #2e7d32;
+            border: 1px solid #81c784;
+        }
+        .footer {
+            text-align: center;
+            color: #666;
+            margin-top: 20px;
+            font-size: 14px;
+        }
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+    {% block extra_styles %}{% endblock %}
+</head>
+<body>
+    <div class="header">
+        <h1>🤖 {% block header %}RAG Chatbot{% endblock %}</h1>
+        <p>{% block subtitle %}Graphiti 지식 그래프 기반 챗봇{% endblock %}</p>
+    </div>
+
+    {% if status_message %}
+    <div class="status {{ status_type }}">
+        {{ status_message }}
+    </div>
+    {% endif %}
+
+    <div class="container">
+        {% block content %}{% endblock %}
+    </div>
+
+    <div class="footer">
+        {% block footer %}
+        <p>Powered by Graphiti 0.17.4 Knowledge Graph</p>
+        <p><a href="/status">시스템 상태 확인</a> | <a href="/">채팅으로 돌아가기</a></p>
+        {% endblock %}
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

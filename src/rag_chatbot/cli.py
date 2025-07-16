@@ -6,6 +6,8 @@ RAG 채팅봇을 위한 명령줄 인터페이스
 import asyncio
 import json
 import sys
+import time
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -26,8 +28,9 @@ console = Console()
 
 @click.group()
 @click.option('--verbose', '-v', is_flag=True, help='Enable verbose logging')
+@click.option('--quiet', '-q', is_flag=True, help='Enable quiet mode (ERROR level only)')
 @click.pass_context
-def main(ctx: click.Context, verbose: bool) -> None:
+def main(ctx: click.Context, verbose: bool, quiet: bool) -> None:
     """
     Production-ready RAG chatbot using Graphiti knowledge graph.
     
@@ -37,10 +40,22 @@ def main(ctx: click.Context, verbose: bool) -> None:
     ctx.ensure_object(dict)
     settings = get_settings()
     
-    if verbose:
+    # 로깅 레벨 조정
+    if quiet:
+        settings.log_level = "ERROR"
+    elif verbose:
         settings.log_level = "DEBUG"
     
     setup_logging(settings)
+    
+    # 시작 로그 및 설정 요약
+    logger = logging.getLogger(__name__)
+    logger.info("=== RAG Chatbot Starting ===")
+    logger.info(f"Version: 0.1.0")
+    logger.info(f"Log Level: {settings.log_level}")
+    logger.debug(f"FalkorDB: {settings.falkor_host}:{settings.falkor_port}")
+    logger.debug(f"Web Server: {settings.web_host}:{settings.web_port}")
+    
     ctx.obj['settings'] = settings
 
 
@@ -313,9 +328,20 @@ def chat(
                         ))
                         continue
                     
-                    # 응답 처리
+                    # 응답 처리 (성능 측정 포함)
+                    start_time = time.time()
                     response = await chat_handler.process_query(user_input, user_id)
+                    response_time = time.time() - start_time
+                    
+                    # 성능 로깅
+                    logger = logging.getLogger(__name__)
+                    logger.info(f"Query processed in {response_time:.2f}s: '{user_input[:50]}...'")
+                    
                     console.print(f"\n[bold green]Assistant[/bold green]: {response}")
+                    
+                    # 느린 응답 시 경고 표시
+                    if response_time > 5.0:
+                        console.print(f"[dim yellow]⚠️ Response time: {response_time:.2f}s[/dim yellow]")
                     
                 except KeyboardInterrupt:
                     break
@@ -361,6 +387,23 @@ def status(ctx: click.Context) -> None:
                 f"Connection: {health_status['connection_ready']}"
             )
             
+            # 캐시 통계
+            try:
+                cache_stats = await service.get_cache_stats()
+                cache_usage = f"{cache_stats['cache_size']}/{cache_stats['max_size']}"
+                cache_efficiency = f"TTL: {cache_stats['ttl_seconds']}s"
+                table.add_row(
+                    "Cache System",
+                    "[green]active[/green]",
+                    f"Usage: {cache_usage}, {cache_efficiency}"
+                )
+            except Exception as e:
+                table.add_row(
+                    "Cache System",
+                    "[yellow]unknown[/yellow]",
+                    f"Stats unavailable: {str(e)[:30]}"
+                )
+            
             # 설정 정보
             table.add_row(
                 "FalkorDB",
@@ -379,6 +422,10 @@ def status(ctx: click.Context) -> None:
             
             llm_text = ", ".join(llm_status) if llm_status else "None configured"
             table.add_row("LLM Providers", "[yellow]available[/yellow]", llm_text)
+            
+            # 성능 설정
+            perf_details = f"Max results: {settings.default_max_results}, History: {settings.default_chat_history_size}"
+            table.add_row("Performance", "[blue]configured[/blue]", perf_details)
             
             console.print(table)
             

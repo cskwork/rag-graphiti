@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+
+{% block title %}System Status - RAG Chatbot{% endblock %}
+{% block header %}📊 System Status{% endblock %}
+{% block subtitle %}RAG Chatbot 시스템 상태{% endblock %}
+
+{% block extra_styles %}
+<style>
+    .status-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 8px;
+        border-left: 4px solid #ddd;
+    }
+    .status-healthy {
+        background-color: #e8f5e8;
+        border-left-color: #4caf50;
+    }
+    .status-warning {
+        background-color: #fff3e0;
+        border-left-color: #ff9800;
+    }
+    .status-error {
+        background-color: #ffebee;
+        border-left-color: #f44336;
+    }
+    .status-text {
+        font-weight: bold;
+    }
+    .status-details {
+        font-size: 14px;
+        color: #666;
+    }
+    .error-details {
+        margin-top: 20px;
+        padding: 15px;
+        background-color: #ffebee;
+        border-left: 4px solid #f44336;
+        border-radius: 5px;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+{% for item in status_items %}
+<div class="status-item status-{{ item.status }}">
+    <div>
+        <strong>{{ item.component }}</strong><br>
+        <span class="status-details">{{ item.details }}</span>
+    </div>
+    <div>
+        <span class="status-text" style="color: {{ item.color }};">{{ item.status_text }}</span>
+    </div>
+</div>
+{% endfor %}
+
+{% if error_message %}
+<div class="error-details">
+    <strong>Error Details:</strong><br>
+    {{ error_message }}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block footer %}
+<p>Powered by Graphiti 0.17.4 Knowledge Graph</p>
+<p><a href="/">← 채팅으로 돌아가기</a></p>
+{% endblock %}

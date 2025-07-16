@@ -13,6 +13,26 @@ from .graphiti_service import GraphitiService
 logger = logging.getLogger(__name__)
 
 
+class ChatError(Exception):
+    """채팅 처리 관련 기본 예외"""
+    pass
+
+
+class SearchError(ChatError):
+    """검색 관련 예외"""
+    pass
+
+
+class ContextError(ChatError):
+    """컨텍스트 처리 관련 예외"""
+    pass
+
+
+class ConversationSaveError(ChatError):
+    """대화 저장 관련 예외"""
+    pass
+
+
 class ChatHandler:
     """
     Handle chat interactions using RAG pattern.
@@ -31,21 +51,81 @@ class ChatHandler:
         max_context_results: Optional[int] = None
     ) -> str:
         """
-        Process user query using RAG pattern.
-        RAG 패턴을 사용한 사용자 질의 처리
+        Process user query using RAG pattern with enhanced error handling.
+        향상된 오류 처리를 포함한 RAG 패턴을 사용한 사용자 질의 처리
         """
+        # 입력 검증
+        if not user_query or not user_query.strip():
+            return "질문을 입력해 주세요."
+        
+        if len(user_query.strip()) > 1000:  # 길이 제한
+            return "질문이 너무 길습니다. 1000자 이내로 입력해 주세요."
+        
         try:
             # 1. 지식 그래프에서 관련 정보 검색
-            if max_context_results is None:
-                max_context_results = self.settings.default_max_results
+            search_results = await self._search_with_fallback(
+                user_query, user_id, max_context_results
+            )
             
-            # 사용자별 개인화된 검색 (user_id가 있는 경우)
+            # 2. 검색 결과를 컨텍스트로 포맷팅
+            try:
+                context = self._format_context(search_results)
+            except Exception as e:
+                logger.error(f"Context formatting error: {e}")
+                raise ContextError(f"검색 결과 처리 중 오류가 발생했습니다: {str(e)}")
+            
+            # 3. 간단한 응답 생성 (LLM 없이 기본 응답)
+            response = self._generate_response(user_query, context, search_results)
+            
+            # 4. 채팅 기록에 저장
+            try:
+                self._add_to_history(user_query, response)
+            except Exception as e:
+                logger.warning(f"Failed to add to chat history: {e}")
+                # 기록 저장 실패는 치명적이지 않음
+            
+            # 5. 현재 대화를 지식 그래프에 추가 (비동기로, 실패해도 응답은 반환)
+            try:
+                await self._save_conversation_to_graph(user_query, response, user_id)
+            except ConversationSaveError as e:
+                logger.warning(f"Failed to save conversation: {e}")
+                # 대화 저장 실패는 사용자에게 알리지 않음 (UX 고려)
+            
+            return response
+            
+        except SearchError as e:
+            logger.error(f"Search error for query '{user_query}': {e}")
+            return "죄송합니다. 검색 중 문제가 발생했습니다. 잠시 후 다시 시도해 주세요."
+            
+        except ContextError as e:
+            logger.error(f"Context error for query '{user_query}': {e}")
+            return "죄송합니다. 정보 처리 중 문제가 발생했습니다. 다시 시도해 주세요."
+            
+        except Exception as e:
+            logger.error(f"Unexpected error processing query '{user_query}': {e}", exc_info=True)
+            return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
+    
+    async def _search_with_fallback(
+        self,
+        user_query: str,
+        user_id: Optional[str],
+        max_context_results: Optional[int]
+    ) -> List[Any]:
+        """검색 시 폴백 로직을 포함한 안전한 검색"""
+        if max_context_results is None:
+            max_context_results = self.settings.default_max_results
+        
+        try:
+            # 사용자별 개인화된 검색 시도
             center_node_uuid = None
             if user_id:
-                # 사용자 노드 찾기
-                user_nodes = await self.graphiti_service.node_search(f"user:{user_id}")
-                if user_nodes:
-                    center_node_uuid = user_nodes[0].uuid
+                try:
+                    user_nodes = await self.graphiti_service.node_search(f"user:{user_id}")
+                    if user_nodes:
+                        center_node_uuid = user_nodes[0].uuid
+                except Exception as e:
+                    logger.warning(f"Failed to find user node for {user_id}: {e}")
+                    # 개인화 검색 실패 시 일반 검색으로 폴백
             
             # 관련 정보 검색
             search_results = await self.graphiti_service.search(
@@ -54,23 +134,11 @@ class ChatHandler:
                 center_node_uuid=center_node_uuid
             )
             
-            # 2. 검색 결과를 컨텍스트로 포맷팅
-            context = self._format_context(search_results)
-            
-            # 3. 간단한 응답 생성 (LLM 없이 기본 응답)
-            response = self._generate_response(user_query, context, search_results)
-            
-            # 4. 채팅 기록에 저장
-            self._add_to_history(user_query, response)
-            
-            # 5. 현재 대화를 지식 그래프에 추가 (비동기로)
-            await self._save_conversation_to_graph(user_query, response, user_id)
-            
-            return response
+            return search_results
             
         except Exception as e:
-            logger.error(f"Error processing query '{user_query}': {e}")
-            return f"죄송합니다. 쿼리 처리 중 오류가 발생했습니다: {str(e)}"
+            logger.error(f"Search failed for query '{user_query}': {e}")
+            raise SearchError(f"검색 중 오류가 발생했습니다: {str(e)}")
     
     def _format_context(self, search_results: List[Any]) -> str:
         """
@@ -169,15 +237,24 @@ class ChatHandler:
         user_id: Optional[str] = None
     ) -> None:
         """
-        Save conversation to knowledge graph.
-        대화를 지식 그래프에 저장
+        Save conversation to knowledge graph with enhanced error handling.
+        향상된 오류 처리를 포함한 대화를 지식 그래프에 저장
         """
         try:
+            # 입력 검증
+            if not user_query.strip() or not response.strip():
+                raise ConversationSaveError("대화 내용이 비어있습니다")
+            
             conversation_text = f"User: {user_query}\nAssistant: {response}"
             
             episode_name = f"chat_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
             if user_id:
-                episode_name += f"_{user_id}"
+                # 사용자 ID 검증 (간단한 알파뉴메릭 체크)
+                if user_id and not user_id.replace('_', '').replace('-', '').isalnum():
+                    logger.warning(f"Invalid user_id format: {user_id}")
+                    user_id = None
+                else:
+                    episode_name += f"_{user_id}"
             
             await self.graphiti_service.add_text_episode(
                 name=episode_name,
@@ -188,7 +265,8 @@ class ChatHandler:
             logger.debug(f"Saved conversation to graph: {episode_name}")
             
         except Exception as e:
-            logger.warning(f"Failed to save conversation to graph: {e}")
+            logger.error(f"Failed to save conversation to graph: {e}")
+            raise ConversationSaveError(f"대화 저장 실패: {str(e)}")
     
     def clear_history(self) -> None:
         """Clear chat history."""

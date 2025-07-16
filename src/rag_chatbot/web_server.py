@@ -4,6 +4,7 @@ RAG 채팅봇을 위한 간단한 웹 인터페이스
 """
 
 import logging
+from pathlib import Path
 from typing import Any, Dict
 
 import uvicorn
@@ -17,276 +18,18 @@ from .graphiti_service import get_graphiti_service
 
 logger = logging.getLogger(__name__)
 
-# HTML 템플릿
-HTML_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>RAG Chatbot</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .header {
-            text-align: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .chat-container {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            min-height: 400px;
-            margin-bottom: 20px;
-        }
-        .chat-messages {
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 10px;
-            border: 1px solid #ddd;
-            border-radius: 5px;
-            margin-bottom: 15px;
-            background-color: #fafafa;
-        }
-        .message {
-            margin-bottom: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            max-width: 80%;
-        }
-        .user-message {
-            background-color: #e3f2fd;
-            margin-left: auto;
-            text-align: right;
-        }
-        .assistant-message {
-            background-color: #f1f8e9;
-            margin-right: auto;
-        }
-        .input-form {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        .input-field {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid #ddd;
-            border-radius: 25px;
-            font-size: 16px;
-            outline: none;
-            transition: border-color 0.3s;
-        }
-        .input-field:focus {
-            border-color: #667eea;
-        }
-        .send-button {
-            padding: 12px 24px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 16px;
-            transition: transform 0.2s;
-        }
-        .send-button:hover {
-            transform: translateY(-1px);
-        }
-        .status {
-            text-align: center;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 5px;
-        }
-        .status.error {
-            background-color: #ffebee;
-            color: #c62828;
-            border: 1px solid #e57373;
-        }
-        .status.success {
-            background-color: #e8f5e8;
-            color: #2e7d32;
-            border: 1px solid #81c784;
-        }
-        .footer {
-            text-align: center;
-            color: #666;
-            margin-top: 20px;
-            font-size: 14px;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🤖 RAG Chatbot</h1>
-        <p>Graphiti 지식 그래프 기반 챗봇</p>
-    </div>
+# 템플릿 디렉토리 설정 및 헬퍼 함수
+def get_templates_dir() -> Path:
+    """Get templates directory path."""
+    return Path(__file__).parent / "templates"
 
-    {% if status_message %}
-    <div class="status {{ status_type }}">
-        {{ status_message }}
-    </div>
-    {% endif %}
 
-    <div class="chat-container">
-        <div class="chat-messages" id="chatMessages">
-            {% if conversation %}
-                {% for message in conversation %}
-                <div class="message {{ 'user-message' if message.role == 'user' else 'assistant-message' }}">
-                    <strong>{{ 'You' if message.role == 'user' else 'Assistant' }}:</strong>
-                    {{ message.content }}
-                </div>
-                {% endfor %}
-            {% else %}
-            <div class="message assistant-message">
-                <strong>Assistant:</strong> 안녕하세요! 무엇을 도와드릴까요? 지식 베이스에서 정보를 검색해드립니다.
-            </div>
-            {% endif %}
-        </div>
-
-        <form method="post" class="input-form">
-            <input type="text" name="user_input" class="input-field" 
-                   placeholder="질문을 입력하세요..." required autocomplete="off">
-            <input type="hidden" name="user_id" value="{{ user_id }}">
-            <button type="submit" class="send-button">전송</button>
-        </form>
-    </div>
-
-    <div class="footer">
-        <p>Powered by Graphiti 0.17.4 Knowledge Graph</p>
-        <p><a href="/status" style="color: #667eea;">시스템 상태 확인</a></p>
-    </div>
-
-    <script>
-        // 자동 스크롤
-        const chatMessages = document.getElementById('chatMessages');
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-
-        // 폼 제출시 입력창 클리어
-        document.querySelector('form').addEventListener('submit', function() {
-            setTimeout(() => {
-                document.querySelector('input[name="user_input"]').value = '';
-            }, 100);
-        });
-    </script>
-</body>
-</html>
-"""
-
-STATUS_TEMPLATE = """
-<!DOCTYPE html>
-<html lang="ko">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>System Status - RAG Chatbot</title>
-    <style>
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .header {
-            text-align: center;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 20px;
-        }
-        .status-container {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        }
-        .status-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 15px;
-            margin: 10px 0;
-            border-radius: 8px;
-            border-left: 4px solid #ddd;
-        }
-        .status-healthy {
-            background-color: #e8f5e8;
-            border-left-color: #4caf50;
-        }
-        .status-warning {
-            background-color: #fff3e0;
-            border-left-color: #ff9800;
-        }
-        .status-error {
-            background-color: #ffebee;
-            border-left-color: #f44336;
-        }
-        .back-link {
-            text-align: center;
-            margin-top: 20px;
-        }
-        .back-link a {
-            color: #667eea;
-            text-decoration: none;
-            padding: 10px 20px;
-            border: 2px solid #667eea;
-            border-radius: 5px;
-            transition: all 0.3s;
-        }
-        .back-link a:hover {
-            background-color: #667eea;
-            color: white;
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>📊 System Status</h1>
-        <p>RAG Chatbot 시스템 상태</p>
-    </div>
-
-    <div class="status-container">
-        {% for item in status_items %}
-        <div class="status-item status-{{ item.status }}">
-            <div>
-                <strong>{{ item.component }}</strong><br>
-                <small>{{ item.details }}</small>
-            </div>
-            <div>
-                <span style="font-weight: bold; color: {{ item.color }};">{{ item.status_text }}</span>
-            </div>
-        </div>
-        {% endfor %}
-        
-        {% if error_message %}
-        <div class="status-item status-error">
-            <div>
-                <strong>Error Details</strong><br>
-                <small>{{ error_message }}</small>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    <div class="back-link">
-        <a href="/">← 채팅으로 돌아가기</a>
-    </div>
-</body>
-</html>
-"""
+def create_templates_instance() -> Jinja2Templates:
+    """Create Jinja2Templates instance with proper directory."""
+    templates_dir = get_templates_dir()
+    if not templates_dir.exists():
+        raise RuntimeError(f"Templates directory not found: {templates_dir}")
+    return Jinja2Templates(directory=str(templates_dir))
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -300,8 +43,8 @@ def create_app(settings: Settings) -> FastAPI:
         version="0.1.0"
     )
     
-    # 템플릿 설정 (인메모리)
-    templates = Jinja2Templates(directory=".")
+    # 템플릿 설정
+    templates = create_templates_instance()
     
     # 전역 변수로 서비스 관리
     app.state.graphiti_service = None
@@ -328,14 +71,15 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def chat_interface(request: Request):
         """Main chat interface."""
-        return HTMLResponse(
-            content=templates.get_template("dummy").render(
-                template=HTML_TEMPLATE,
-                conversation=app.state.conversation_history,
-                user_id="web_user",
-                status_message=None,
-                status_type=None
-            ).replace("{% extends 'dummy' %}", "").replace("{% block content %}{% endblock %}", HTML_TEMPLATE)
+        return templates.TemplateResponse(
+            "chat.html",
+            {
+                "request": request,
+                "conversation": app.state.conversation_history,
+                "user_id": "web_user",
+                "status_message": None,
+                "status_type": None
+            }
         )
     
     @app.post("/", response_class=HTMLResponse)
@@ -364,50 +108,29 @@ def create_app(settings: Settings) -> FastAPI:
             if len(app.state.conversation_history) > 20:
                 app.state.conversation_history = app.state.conversation_history[-20:]
             
-            return HTMLResponse(
-                content=HTML_TEMPLATE.replace(
-                    "{% if conversation %}", ""
-                ).replace(
-                    "{% for message in conversation %}", 
-                    "".join([
-                        f'<div class="message {"user-message" if msg["role"] == "user" else "assistant-message"}">'
-                        f'<strong>{"You" if msg["role"] == "user" else "Assistant"}:</strong> {msg["content"]}</div>'
-                        for msg in app.state.conversation_history
-                    ])
-                ).replace(
-                    "{% endfor %}", ""
-                ).replace(
-                    "{% else %}", "<!--"
-                ).replace(
-                    "{% endif %}", "-->"
-                ).replace(
-                    "{{ user_id }}", user_id
-                ).replace(
-                    "{% if status_message %}", "<!--"
-                ).replace(
-                    "{% endif %}", "-->"
-                )
+            return templates.TemplateResponse(
+                "chat.html",
+                {
+                    "request": request,
+                    "conversation": app.state.conversation_history,
+                    "user_id": user_id,
+                    "status_message": None,
+                    "status_type": None
+                }
             )
             
         except Exception as e:
             logger.error(f"Error processing chat: {e}")
             
-            return HTMLResponse(
-                content=HTML_TEMPLATE.replace(
-                    "{% if status_message %}", ""
-                ).replace(
-                    "{{ status_message }}", f"오류가 발생했습니다: {str(e)}"
-                ).replace(
-                    "{{ status_type }}", "error"
-                ).replace(
-                    "{% endif %}", ""
-                ).replace(
-                    "{{ user_id }}", user_id
-                ).replace(
-                    "{% if conversation %}", "<!--"
-                ).replace(
-                    "{% endfor %}", "-->"
-                )
+            return templates.TemplateResponse(
+                "chat.html",
+                {
+                    "request": request,
+                    "conversation": app.state.conversation_history,
+                    "user_id": user_id,
+                    "status_message": f"오류가 발생했습니다: {str(e)}",
+                    "status_type": "error"
+                }
             )
     
     @app.get("/status", response_class=HTMLResponse)
@@ -478,28 +201,24 @@ def create_app(settings: Settings) -> FastAPI:
                 "color": llm_color
             })
             
-            return HTMLResponse(
-                content=STATUS_TEMPLATE.replace(
-                    "{% for item in status_items %}", ""
-                ).replace(
-                    "{% endfor %}", ""
-                ).replace(
-                    "{% if error_message %}", "" if error_message else "<!--"
-                ).replace(
-                    "{% endif %}", "" if error_message else "-->"
-                ).replace(
-                    "{{ error_message }}", error_message or ""
-                ) + "".join([
-                    f'<div class="status-item status-{item["status"]}">'
-                    f'<div><strong>{item["component"]}</strong><br><small>{item["details"]}</small></div>'
-                    f'<div><span style="font-weight: bold; color: {item["color"]};">{item["status_text"]}</span></div></div>'
-                    for item in status_items
-                ])
+            return templates.TemplateResponse(
+                "status.html",
+                {
+                    "request": request,
+                    "status_items": status_items,
+                    "error_message": error_message
+                }
             )
             
         except Exception as e:
-            return HTMLResponse(
-                content=f"<h1>Status Error</h1><p>Failed to get status: {e}</p>",
+            logger.error(f"Status page error: {e}")
+            return templates.TemplateResponse(
+                "status.html",
+                {
+                    "request": request,
+                    "status_items": [],
+                    "error_message": f"Failed to get status: {e}"
+                },
                 status_code=500
             )
     
