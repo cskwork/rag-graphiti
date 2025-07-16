@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  # FalkorDB - Redis-compatible graph database
+  falkordb:
+    image: falkordb/falkordb:latest
+    container_name: rag-falkordb
+    ports:
+      - "6379:6379"
+    volumes:
+      - falkordb_data:/data
+    command: ["falkordb-server", "--protected-mode", "no", "--save", "60", "1"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # RAG Chatbot application
+  rag-chatbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rag-chatbot-app
+    ports:
+      - "8000:8000"
+    environment:
+      - FALKORDB_HOST=falkordb
+      - FALKORDB_PORT=6379
+      - LOG_LEVEL=INFO
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=8000
+    env_file:
+      - .env
+    depends_on:
+      falkordb:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data  # Document upload directory
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  falkordb_data:
+    driver: local
+
+networks:
+  default:
+    name: rag-chatbot-network
