@@ -4,8 +4,9 @@ RAG 채팅봇의 대화 처리 로직
 """
 
 import logging
+import re
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from .config import Settings
 from .graphiti_service import GraphitiService
@@ -43,6 +44,7 @@ class ChatHandler:
         self.graphiti_service = graphiti_service
         self.settings = settings
         self.chat_history: List[Dict[str, Any]] = []
+        self.recent_topics: List[str] = []  # 최근 3개 토픽만 유지
         
     async def process_query(
         self,
@@ -62,34 +64,35 @@ class ChatHandler:
             return "질문이 너무 길습니다. 1000자 이내로 입력해 주세요."
         
         try:
-            # 1. 지식 그래프에서 관련 정보 검색
-            search_results = await self._search_with_fallback(
+            # 1. 간단한 컨텍스트 업데이트
+            self._update_recent_topics(user_query)
+            
+            # 2. 컨텍스트 기반 검색
+            search_results = await self._search_with_context(
                 user_query, user_id, max_context_results
             )
             
-            # 2. 검색 결과를 컨텍스트로 포맷팅
+            # 3. 검색 결과를 컨텍스트로 포맷팅
             try:
                 context = self._format_context(search_results)
             except Exception as e:
                 logger.error(f"Context formatting error: {e}")
                 raise ContextError(f"검색 결과 처리 중 오류가 발생했습니다: {str(e)}")
             
-            # 3. 간단한 응답 생성 (LLM 없이 기본 응답)
+            # 4. 응답 생성
             response = self._generate_response(user_query, context, search_results)
             
-            # 4. 채팅 기록에 저장
+            # 5. 채팅 기록에 저장
             try:
                 self._add_to_history(user_query, response)
             except Exception as e:
                 logger.warning(f"Failed to add to chat history: {e}")
-                # 기록 저장 실패는 치명적이지 않음
             
-            # 5. 현재 대화를 지식 그래프에 추가 (비동기로, 실패해도 응답은 반환)
+            # 6. 대화 저장
             try:
                 await self._save_conversation_to_graph(user_query, response, user_id)
             except ConversationSaveError as e:
                 logger.warning(f"Failed to save conversation: {e}")
-                # 대화 저장 실패는 사용자에게 알리지 않음 (UX 고려)
             
             return response
             
@@ -105,18 +108,54 @@ class ChatHandler:
             logger.error(f"Unexpected error processing query '{user_query}': {e}", exc_info=True)
             return "죄송합니다. 일시적인 오류가 발생했습니다. 잠시 후 다시 시도해 주세요."
     
-    async def _search_with_fallback(
+    def _update_recent_topics(self, user_query: str) -> None:
+        """
+        Update recent topics from user query.
+        사용자 쿼리에서 최근 토픽 업데이트
+        """
+        # 간단한 키워드 기반 토픽 추출
+        topics = []
+        text_lower = user_query.lower()
+        
+        # 주요 키워드만 체크
+        if any(word in text_lower for word in ['python', 'javascript', 'code', 'programming']):
+            topics.append("programming")
+        if any(word in text_lower for word in ['database', 'sql', 'data']):
+            topics.append("database")
+        if any(word in text_lower for word in ['web', 'html', 'css', 'frontend']):
+            topics.append("web")
+        if any(word in text_lower for word in ['server', 'backend', 'api']):
+            topics.append("backend")
+        
+        # 최근 토픽 업데이트 (최대 3개)
+        for topic in topics:
+            if topic not in self.recent_topics:
+                self.recent_topics.append(topic)
+        
+        # 최근 3개만 유지
+        if len(self.recent_topics) > 3:
+            self.recent_topics = self.recent_topics[-3:]
+    
+    async def _search_with_context(
         self,
         user_query: str,
         user_id: Optional[str],
         max_context_results: Optional[int]
     ) -> List[Any]:
-        """검색 시 폴백 로직을 포함한 안전한 검색"""
+        """
+        Search with minimal context enhancement.
+        최소한의 컨텍스트 향상을 통한 검색
+        """
         if max_context_results is None:
             max_context_results = self.settings.default_max_results
         
         try:
-            # 사용자별 개인화된 검색 시도
+            # 최근 토픽으로 쿼리 확장 (간단하게)
+            enhanced_query = user_query
+            if self.recent_topics:
+                enhanced_query = f"{user_query} {' '.join(self.recent_topics)}"
+            
+            # 사용자 중심 검색
             center_node_uuid = None
             if user_id:
                 try:
@@ -125,11 +164,10 @@ class ChatHandler:
                         center_node_uuid = user_nodes[0].uuid
                 except Exception as e:
                     logger.warning(f"Failed to find user node for {user_id}: {e}")
-                    # 개인화 검색 실패 시 일반 검색으로 폴백
             
-            # 관련 정보 검색
+            # 검색 실행
             search_results = await self.graphiti_service.search(
-                query=user_query,
+                query=enhanced_query,
                 max_results=max_context_results,
                 center_node_uuid=center_node_uuid
             )
@@ -269,9 +307,10 @@ class ChatHandler:
             raise ConversationSaveError(f"대화 저장 실패: {str(e)}")
     
     def clear_history(self) -> None:
-        """Clear chat history."""
+        """Clear chat history and recent topics."""
         self.chat_history.clear()
-        logger.info("Chat history cleared")
+        self.recent_topics.clear()
+        logger.info("Chat history and context cleared")
     
     def get_history_summary(self) -> str:
         """Get chat history summary."""

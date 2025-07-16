@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, Callable
 from functools import lru_cache, wraps
@@ -196,11 +197,14 @@ class GraphitiService:
         self.settings = settings
         self._graphiti: Optional[Graphiti] = None
         self._connection_pool_ready = False
-        self._cache = TTLCache(maxsize=100, ttl=300)  # 5분 TTL 캐시
+        self._cache = TTLCache(
+            maxsize=settings.cache_max_size, 
+            ttl=settings.cache_ttl
+        )
         self._initialization_lock = asyncio.Lock()
         self._circuit_breaker = CircuitBreaker(
-            failure_threshold=5,
-            recovery_timeout=60,
+            failure_threshold=settings.circuit_breaker_threshold,
+            recovery_timeout=settings.circuit_breaker_timeout,
             expected_exception=Exception
         )
         
@@ -356,19 +360,151 @@ class GraphitiService:
         center_node_uuid: Optional[str]
     ) -> List[EntityEdge]:
         """실제 검색 로직"""
+        # 더 많은 결과를 가져와서 후처리로 순위를 재조정
+        fetch_size = min(max_results * 2, 50)  # 최대 2배까지 가져오되 50개 제한
+        
         if center_node_uuid:
             # 중심 노드 기반 검색 (개인화된 결과)
-            return await self._graphiti.search(
+            raw_results = await self._graphiti.search(
                 query=query,
                 center_node_uuid=center_node_uuid,
-                num_results=max_results
+                num_results=fetch_size
             )
         else:
             # 일반 하이브리드 검색
-            return await self._graphiti.search(
+            raw_results = await self._graphiti.search(
                 query=query,
-                num_results=max_results
+                num_results=fetch_size
             )
+        
+        # 검색 결과 순위 재조정
+        if raw_results:
+            reranked_results = self._rerank_search_results(query, raw_results)
+            return reranked_results[:max_results]
+        
+        return raw_results
+    
+    def _rerank_search_results(self, query: str, results: List[EntityEdge]) -> List[EntityEdge]:
+        """
+        Re-rank search results using improved scoring algorithm.
+        개선된 스코어링 알고리즘을 사용한 검색 결과 재순위화
+        """
+        if not results:
+            return results
+        
+        # 쿼리 전처리
+        query_lower = query.lower().strip()
+        query_words = set(re.findall(r'\b\w+\b', query_lower))
+        
+        # 각 결과에 대해 점수 계산
+        scored_results = []
+        for result in results:
+            try:
+                score = self._calculate_relevance_score(query_lower, query_words, result)
+                scored_results.append((score, result))
+            except Exception as e:
+                logger.warning(f"Failed to score result: {e}")
+                scored_results.append((0.0, result))  # 기본 점수
+        
+        # 점수 기준으로 정렬 (높은 점수 순)
+        scored_results.sort(key=lambda x: x[0], reverse=True)
+        
+        # 점수가 같은 경우 날짜 기준 정렬 (최신 순)
+        scored_results.sort(key=lambda x: (x[0], self._get_result_timestamp(x[1])), reverse=True)
+        
+        # 결과만 반환
+        return [result for score, result in scored_results]
+    
+    def _calculate_relevance_score(self, query: str, query_words: set, result: EntityEdge) -> float:
+        """
+        Calculate relevance score for a single result.
+        단일 결과에 대한 관련성 점수 계산
+        """
+        fact = result.fact.lower()
+        score = 0.0
+        
+        # 1. 정확한 쿼리 매칭 (가장 높은 점수)
+        if query in fact:
+            score += 10.0
+            # 쿼리가 시작 부분에 있으면 추가 점수
+            if fact.startswith(query):
+                score += 5.0
+        
+        # 2. 단어 매칭 점수
+        fact_words = set(re.findall(r'\b\w+\b', fact))
+        matched_words = query_words.intersection(fact_words)
+        if matched_words:
+            # 매칭된 단어 비율에 따른 점수
+            word_match_ratio = len(matched_words) / len(query_words)
+            score += word_match_ratio * 5.0
+            
+            # 희귀 단어 매칭 보너스 (짧은 단어일수록 흔함)
+            rare_word_bonus = sum(1.0 / max(len(word), 1) for word in matched_words)
+            score += rare_word_bonus
+        
+        # 3. 부분 문자열 매칭 점수
+        for word in query_words:
+            if word in fact:
+                score += 2.0
+                # 단어가 완전히 매칭되면 추가 점수
+                if f' {word} ' in f' {fact} ':
+                    score += 1.0
+        
+        # 4. 텍스트 길이 기반 점수 조정
+        # 너무 짧거나 너무 긴 텍스트는 점수 감소
+        fact_length = len(fact)
+        if 10 <= fact_length <= 200:
+            score += 1.0
+        elif fact_length < 10:
+            score -= 2.0
+        elif fact_length > 500:
+            score -= 1.0
+        
+        # 5. 시간 기반 점수 (최신 콘텐츠 우선)
+        try:
+            timestamp = self._get_result_timestamp(result)
+            if timestamp:
+                # 최근 30일 내 콘텐츠에 보너스
+                now = datetime.now(timezone.utc)
+                time_diff = (now - timestamp).days
+                if time_diff <= 30:
+                    score += 1.0
+                elif time_diff <= 90:
+                    score += 0.5
+        except Exception:
+            pass  # 시간 정보가 없는 경우 무시
+        
+        # 6. 특수 키워드 보너스
+        important_keywords = ['오류', 'error', '문제', 'problem', '해결', 'solution', '방법', 'how']
+        for keyword in important_keywords:
+            if keyword in query.lower() and keyword in fact:
+                score += 1.5
+        
+        return max(score, 0.0)  # 음수 점수 방지
+    
+    def _get_result_timestamp(self, result: EntityEdge) -> Optional[datetime]:
+        """
+        Extract timestamp from search result.
+        검색 결과에서 타임스탬프 추출
+        """
+        try:
+            # valid_at이 있는 경우 우선 사용
+            if hasattr(result, 'valid_at') and result.valid_at:
+                if isinstance(result.valid_at, datetime):
+                    return result.valid_at
+                elif isinstance(result.valid_at, str):
+                    return datetime.fromisoformat(result.valid_at.replace('Z', '+00:00'))
+            
+            # 다른 시간 필드 확인
+            if hasattr(result, 'created_at') and result.created_at:
+                if isinstance(result.created_at, datetime):
+                    return result.created_at
+                elif isinstance(result.created_at, str):
+                    return datetime.fromisoformat(result.created_at.replace('Z', '+00:00'))
+            
+            return None
+        except Exception:
+            return None
     
     async def node_search(
         self,
@@ -442,10 +578,10 @@ class GraphitiService:
                 "ttl_seconds": self._cache.ttl
             }
     
-    def format_search_results(self, results: List[EntityEdge]) -> str:
+    def format_search_results(self, results: List[EntityEdge], query: str = "") -> str:
         """
-        Format search results for display.
-        검색 결과를 표시용으로 포맷팅
+        Format search results for display with enhanced information.
+        향상된 정보와 함께 검색 결과를 표시용으로 포맷팅
         """
         if not results:
             return "검색 결과가 없습니다."
@@ -453,14 +589,78 @@ class GraphitiService:
         formatted = []
         for i, result in enumerate(results, 1):
             fact = result.fact
+            
+            # 관련성 점수 계산 (표시용)
+            relevance_score = 0.0
+            if query:
+                query_lower = query.lower().strip()
+                query_words = set(re.findall(r'\b\w+\b', query_lower))
+                try:
+                    relevance_score = self._calculate_relevance_score(query_lower, query_words, result)
+                except Exception:
+                    pass
+            
             # 날짜 정보가 있으면 포함
             date_info = ""
-            if hasattr(result, 'valid_at') and result.valid_at:
-                date_info = f" (시작: {result.valid_at})"
-            if hasattr(result, 'invalid_at') and result.invalid_at:
-                date_info += f" (종료: {result.invalid_at})"
+            timestamp = self._get_result_timestamp(result)
+            if timestamp:
+                date_str = timestamp.strftime("%Y-%m-%d")
+                date_info = f" ({date_str})"
             
-            formatted.append(f"{i}. {fact}{date_info}")
+            # 관련성 점수 표시 (디버그 모드에서만)
+            score_info = ""
+            if query and relevance_score > 0:
+                score_info = f" [관련성: {relevance_score:.1f}]"
+            
+            formatted.append(f"{i}. {fact}{date_info}{score_info}")
+        
+        return "\n".join(formatted)
+    
+    def format_search_results_with_explanations(
+        self, 
+        results: List[EntityEdge], 
+        query: str,
+        show_scores: bool = False
+    ) -> str:
+        """
+        Format search results with detailed explanations.
+        상세한 설명과 함께 검색 결과 포맷팅
+        """
+        if not results:
+            return "검색 결과가 없습니다."
+        
+        formatted = [f"'{query}' 검색 결과 ({len(results)}개):"]
+        formatted.append("=" * 50)
+        
+        query_lower = query.lower().strip()
+        query_words = set(re.findall(r'\b\w+\b', query_lower))
+        
+        for i, result in enumerate(results, 1):
+            fact = result.fact
+            
+            # 관련성 점수 및 매칭 정보
+            try:
+                relevance_score = self._calculate_relevance_score(query_lower, query_words, result)
+                fact_words = set(re.findall(r'\b\w+\b', fact.lower()))
+                matched_words = query_words.intersection(fact_words)
+                
+                formatted.append(f"\n{i}. {fact}")
+                
+                if show_scores:
+                    formatted.append(f"   관련성 점수: {relevance_score:.1f}")
+                    if matched_words:
+                        formatted.append(f"   매칭된 단어: {', '.join(matched_words)}")
+                
+                # 날짜 정보
+                timestamp = self._get_result_timestamp(result)
+                if timestamp:
+                    date_str = timestamp.strftime("%Y-%m-%d %H:%M")
+                    formatted.append(f"   날짜: {date_str}")
+                
+            except Exception as e:
+                formatted.append(f"\n{i}. {fact}")
+                if show_scores:
+                    formatted.append(f"   (점수 계산 오류: {e})")
         
         return "\n".join(formatted)
 

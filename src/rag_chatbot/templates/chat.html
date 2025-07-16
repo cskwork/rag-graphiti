@@ -2,36 +2,307 @@
 
 {% block extra_styles %}
 <style>
+    body {
+        font-family: 'Segoe UI', system-ui, sans-serif;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+        min-height: 100vh;
+        margin: 0;
+        padding: 20px;
+    }
+    .container {
+        max-width: 800px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 15px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+        overflow: hidden;
+    }
+    .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 20px;
+        text-align: center;
+    }
+    .header h1 {
+        margin: 0;
+        font-size: 1.8em;
+        font-weight: 300;
+    }
+    .header p {
+        margin: 5px 0 0 0;
+        opacity: 0.9;
+        font-size: 0.9em;
+    }
+    .chat-container {
+        height: 500px;
+        display: flex;
+        flex-direction: column;
+    }
     .chat-messages {
-        max-height: 300px;
+        flex: 1;
         overflow-y: auto;
-        padding: 10px;
-        border: 1px solid #ddd;
-        border-radius: 5px;
-        margin-bottom: 15px;
-        background-color: #fafafa;
+        padding: 20px;
+        background: #f8f9fa;
     }
     .message {
-        margin-bottom: 10px;
-        padding: 8px 12px;
-        border-radius: 8px;
-        max-width: 80%;
+        margin-bottom: 15px;
+        padding: 12px 16px;
+        border-radius: 18px;
+        max-width: 75%;
+        word-wrap: break-word;
+        animation: fadeIn 0.3s ease-in;
     }
     .user-message {
-        background-color: #e3f2fd;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
         margin-left: auto;
         text-align: right;
+        border-bottom-right-radius: 5px;
     }
     .assistant-message {
-        background-color: #f1f8e9;
+        background: white;
+        color: #333;
         margin-right: auto;
+        border: 1px solid #e1e8ed;
+        border-bottom-left-radius: 5px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    }
+    .message-time {
+        font-size: 0.8em;
+        opacity: 0.7;
+        margin-top: 5px;
     }
     .input-form {
         display: flex;
-        gap: 10px;
-        align-items: center;
+        padding: 20px;
+        background: white;
+        border-top: 1px solid #e1e8ed;
     }
-    .input-field {
+    .input-form input {
+        flex: 1;
+        padding: 12px 16px;
+        border: 1px solid #e1e8ed;
+        border-radius: 25px;
+        font-size: 14px;
+        outline: none;
+        transition: all 0.3s ease;
+    }
+    .input-form input:focus {
+        border-color: #667eea;
+        box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+    }
+    .input-form button {
+        margin-left: 10px;
+        padding: 12px 24px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 25px;
+        cursor: pointer;
+        font-weight: 500;
+        transition: all 0.3s ease;
+    }
+    .input-form button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+    .input-form button:active {
+        transform: translateY(0);
+    }
+    .welcome-message {
+        text-align: center;
+        color: #666;
+        font-style: italic;
+        margin: 50px 0;
+    }
+    .welcome-message .icon {
+        font-size: 3em;
+        margin-bottom: 10px;
+    }
+    .status-info {
+        background: #e8f5e8;
+        border-left: 4px solid #4caf50;
+        padding: 10px 15px;
+        margin: 10px 20px;
+        border-radius: 5px;
+        font-size: 0.9em;
+    }
+    .quick-actions {
+        display: flex;
+        gap: 10px;
+        padding: 10px 20px;
+        background: #f8f9fa;
+        border-bottom: 1px solid #e1e8ed;
+    }
+    .quick-action {
+        padding: 8px 16px;
+        background: white;
+        border: 1px solid #e1e8ed;
+        border-radius: 20px;
+        cursor: pointer;
+        font-size: 0.85em;
+        transition: all 0.3s ease;
+    }
+    .quick-action:hover {
+        background: #667eea;
+        color: white;
+        border-color: #667eea;
+    }
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .thinking {
+        display: inline-block;
+        padding: 8px 16px;
+        background: #f0f0f0;
+        border-radius: 18px;
+        margin: 10px 0;
+        animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 0.7; }
+        50% { opacity: 1; }
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="header">
+        <h1>🤖 RAG Chatbot</h1>
+        <p>AI-powered knowledge assistant with graph search</p>
+    </div>
+    
+    <div class="status-info">
+        <strong>Status:</strong> {{ status.status | title }} | 
+        <strong>Connection:</strong> {{ status.connection_ready | title }} |
+        <strong>User:</strong> {{ user_id or 'Anonymous' }}
+    </div>
+    
+    <div class="quick-actions">
+        <div class="quick-action" onclick="sendQuickQuery('What can you do?')">💡 What can you do?</div>
+        <div class="quick-action" onclick="sendQuickQuery('Search for AI')">🔍 Search for AI</div>
+        <div class="quick-action" onclick="sendQuickQuery('Show me Python info')">🐍 Python info</div>
+        <div class="quick-action" onclick="clearChat()">🗑️ Clear chat</div>
+    </div>
+    
+    <div class="chat-container">
+        <div class="chat-messages" id="chatMessages">
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="message {{ 'user-message' if message.role == 'user' else 'assistant-message' }}">
+                        {{ message.content }}
+                        <div class="message-time">{{ message.timestamp.strftime('%H:%M') if message.timestamp else 'now' }}</div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="welcome-message">
+                    <div class="icon">🤖</div>
+                    <h3>Welcome to RAG Chatbot!</h3>
+                    <p>Ask me anything about your knowledge base</p>
+                    <p>Try searching for topics or asking questions</p>
+                </div>
+            {% endif %}
+        </div>
+        
+        <form class="input-form" onsubmit="sendMessage(event)">
+            <input type="text" id="messageInput" placeholder="Type your message..." required>
+            <button type="submit">Send</button>
+        </form>
+    </div>
+</div>
+
+<script>
+function sendMessage(event) {
+    event.preventDefault();
+    const input = document.getElementById('messageInput');
+    const message = input.value.trim();
+    
+    if (!message) return;
+    
+    addMessage(message, 'user');
+    input.value = '';
+    
+    // Show thinking indicator
+    const thinking = document.createElement('div');
+    thinking.className = 'thinking';
+    thinking.innerHTML = '🤔 Thinking...';
+    thinking.id = 'thinking';
+    document.getElementById('chatMessages').appendChild(thinking);
+    scrollToBottom();
+    
+    // Send to server
+    fetch('/chat', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: `message=${encodeURIComponent(message)}&user_id={{ user_id or '' }}`
+    })
+    .then(response => response.json())
+    .then(data => {
+        // Remove thinking indicator
+        const thinkingElement = document.getElementById('thinking');
+        if (thinkingElement) {
+            thinkingElement.remove();
+        }
+        
+        addMessage(data.response, 'assistant');
+    })
+    .catch(error => {
+        console.error('Error:', error);
+        const thinkingElement = document.getElementById('thinking');
+        if (thinkingElement) {
+            thinkingElement.remove();
+        }
+        addMessage('Sorry, I encountered an error. Please try again.', 'assistant');
+    });
+}
+
+function addMessage(content, role) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const messageDiv = document.createElement('div');
+    messageDiv.className = `message ${role}-message`;
+    
+    const now = new Date();
+    const timeString = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    
+    messageDiv.innerHTML = `
+        ${content}
+        <div class="message-time">${timeString}</div>
+    `;
+    
+    messagesDiv.appendChild(messageDiv);
+    scrollToBottom();
+}
+
+function scrollToBottom() {
+    const messagesDiv = document.getElementById('chatMessages');
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+function sendQuickQuery(query) {
+    document.getElementById('messageInput').value = query;
+    document.querySelector('.input-form').dispatchEvent(new Event('submit'));
+}
+
+function clearChat() {
+    if (confirm('Clear all chat messages?')) {
+        document.getElementById('chatMessages').innerHTML = `
+            <div class="welcome-message">
+                <div class="icon">🤖</div>
+                <h3>Chat cleared!</h3>
+                <p>Start a new conversation</p>
+            </div>
+        `;
+    }
+}
+
+// Auto-focus on message input
+document.getElementById('messageInput').focus();
+</script>
+{% endblock %}
         flex: 1;
         padding: 12px;
         border: 2px solid #ddd;

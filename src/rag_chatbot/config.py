@@ -157,9 +157,30 @@ def get_settings() -> Settings:
     try:
         return Settings()
     except Exception as e:
-        # 설정 로드 실패 시 기본 설정으로 폴백
-        print(f"Warning: Failed to load settings: {e}")
-        print("Using default settings")
+        # 설정 로드 실패 시 상세한 해결 방법 제공
+        print(f"❌ Configuration Error: {e}")
+        print("\n🔧 Possible solutions:")
+        
+        if "FalkorDB" in str(e) or "falkor" in str(e):
+            print("  1. Check if FalkorDB is running: docker-compose up -d falkordb")
+            print("  2. Verify FALKORDB_HOST and FALKORDB_PORT in .env file")
+            print("  3. Example: FALKORDB_HOST=localhost, FALKORDB_PORT=6379")
+        
+        if "port" in str(e).lower():
+            print("  1. Ensure ports are not in use: netstat -tulpn | grep <port>")
+            print("  2. Try different ports in .env file")
+            print("  3. Default ports: FalkorDB=6379, Web=8000")
+        
+        if "API" in str(e) or "key" in str(e):
+            print("  1. Set LLM API keys in .env file (optional)")
+            print("  2. Example: OPENAI_API_KEY=your_key_here")
+            print("  3. Chatbot works without LLM keys (search-only mode)")
+        
+        print("\n💡 Quick fix: Copy .env.example to .env and edit the values")
+        print("📖 Full setup guide: rag-chatbot setup --help")
+        
+        # 기본 설정으로 폴백
+        print("\n⚠️  Using default settings to continue...")
         return Settings(
             falkor_host="localhost",
             falkor_port="6379",
@@ -225,6 +246,51 @@ def setup_logging(settings: Settings) -> None:
     logger = logging.getLogger(__name__)
     logger.info(f"Logging configured with level: {settings.log_level}")
     logger.debug(f"Settings validation passed")
+
+
+def create_example_env_file(file_path: str = ".env") -> None:
+    """Create example .env file with default values and explanations."""
+    env_content = """# RAG Chatbot Configuration
+# 설정 파일 - 필요에 따라 수정하세요
+
+# FalkorDB 설정 (필수)
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6379
+# FALKORDB_USERNAME=
+# FALKORDB_PASSWORD=
+
+# LLM API 키 (선택사항 - 하나 이상 설정 권장)
+# OPENAI_API_KEY=your_openai_key_here
+# ANTHROPIC_API_KEY=your_anthropic_key_here
+# GOOGLE_API_KEY=your_google_key_here
+
+# 로깅 설정
+LOG_LEVEL=INFO
+
+# 검색 설정
+DEFAULT_MAX_RESULTS=5
+DEFAULT_CHAT_HISTORY_SIZE=10
+
+# 웹 서버 설정
+WEB_HOST=0.0.0.0
+WEB_PORT=8000
+
+# 캐시 설정
+CACHE_TTL=300
+CACHE_MAX_SIZE=100
+
+# Performance 설정
+CIRCUIT_BREAKER_THRESHOLD=5
+CIRCUIT_BREAKER_TIMEOUT=60
+"""
+    
+    try:
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(env_content)
+        print(f"✅ Created example configuration file: {file_path}")
+        print("📝 Edit this file with your specific settings")
+    except Exception as e:
+        print(f"❌ Failed to create {file_path}: {e}")
 
 
 def print_settings_summary(settings: Settings) -> None:
