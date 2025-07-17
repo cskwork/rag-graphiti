@@ -451,7 +451,7 @@ def create_app(settings: Settings) -> FastAPI:
             # FalkorDB 설정
             status_items.append({
                 "component": "FalkorDB Connection",
-                "details": f"{settings.falkor_host}:{settings.falkor_port}",
+                "details": f"{settings.falkordb_host}:{settings.falkordb_port}",
                 "status": "healthy",
                 "status_text": "설정됨",
                 "color": "#2196f3"

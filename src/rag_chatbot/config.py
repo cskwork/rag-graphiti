@@ -14,10 +14,10 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # FalkorDB 설정
-    falkor_host: str = Field(default="localhost", description="FalkorDB host")
-    falkor_port: str = Field(default="6379", description="FalkorDB port")
-    falkor_username: Optional[str] = Field(default=None, description="FalkorDB username")
-    falkor_password: Optional[SecretStr] = Field(default=None, description="FalkorDB password")
+    falkordb_host: str = Field(default="localhost", description="FalkorDB host")
+    falkordb_port: str = Field(default="6379", description="FalkorDB port")
+    falkordb_username: Optional[str] = Field(default=None, description="FalkorDB username")
+    falkordb_password: Optional[SecretStr] = Field(default=None, description="FalkorDB password")
     
     # LLM 설정 (선택사항)
     openai_api_key: Optional[SecretStr] = Field(default=None, description="OpenAI API key")

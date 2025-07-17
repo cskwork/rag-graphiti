@@ -365,7 +365,7 @@ def status(ctx: click.Context) -> None:
             table.add_row(
                 "FalkorDB",
                 "[blue]configured[/blue]",
-                f"{settings.falkor_host}:{settings.falkor_port}"
+                f"{settings.falkordb_host}:{settings.falkordb_port}"
             )
             
             # LLM 설정 확인

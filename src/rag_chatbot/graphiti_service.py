@@ -36,11 +36,11 @@ class GraphitiService:
         try:
             # FalkorDB 드라이버 초기화
             falkor_driver = FalkorDriver(
-                host=self.settings.falkor_host,
-                port=self.settings.falkor_port,
-                username=self.settings.falkor_username,
-                password=self.settings.falkor_password.get_secret_value() 
-                if self.settings.falkor_password else None
+                host=self.settings.falkordb_host,
+                port=self.settings.falkordb_port,
+                username=self.settings.falkordb_username,
+                password=self.settings.falkordb_password.get_secret_value() 
+                if self.settings.falkordb_password else None
             )
             
             # Graphiti 인스턴스 생성

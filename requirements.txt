@@ -12,7 +12,7 @@ jinja2>=3.1.0
 python-multipart>=0.0.6
 
 # Optional dependencies - uncomment as needed
-# graphiti-core[falkordb] for FalkorDB support
-# graphiti-core[anthropic] for Anthropic Claude
-# graphiti-core[openai] for OpenAI GPT models
-# graphiti-core[google-genai] for Google Gemini
+graphiti-core[falkordb] 
+# graphiti-core[anthropic] 
+graphiti-core[openai] 
+# graphiti-core[google-genai] 
