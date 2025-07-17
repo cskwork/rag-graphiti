@@ -45,6 +45,18 @@ class Settings(BaseSettings):
     web_port: int = Field(default=8000, description="Web server port")
     web_reload: bool = Field(default=False, description="Enable auto-reload")
     
+    # URL 처리 설정
+    url_request_timeout: int = Field(default=30, description="URL request timeout in seconds")
+    url_max_retries: int = Field(default=3, description="Maximum retries for URL requests")
+    url_user_agent: str = Field(
+        default="RAG-Chatbot/1.0 (Document Processor)", 
+        description="User agent for URL requests"
+    )
+    url_max_content_length: int = Field(
+        default=10 * 1024 * 1024,  # 10MB
+        description="Maximum content length for URL downloads"
+    )
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

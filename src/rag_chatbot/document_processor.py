@@ -8,6 +8,12 @@ import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
+
+import aiofiles
+import httpx
+import markdown
+from bs4 import BeautifulSoup
 
 from .config import Settings
 from .graphiti_service import GraphitiService
@@ -88,6 +94,9 @@ class DocumentProcessor:
                 chunk_size=chunk_size
             )
         
+        elif file_path.suffix.lower() == '.md':
+            return await self._add_markdown_file(file_path, source_description, chunk_size)
+        
         elif file_path.suffix.lower() == '.json':
             return await self._add_json_file(file_path, source_description)
         
@@ -131,6 +140,37 @@ class DocumentProcessor:
             logger.info(f"Added JSON data '{title}'")
             return 1
     
+    async def _add_markdown_file(
+        self,
+        file_path: Path,
+        source_description: str,
+        chunk_size: int = 1000
+    ) -> int:
+        """Add markdown file to knowledge graph."""
+        try:
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                markdown_content = await f.read()
+            
+            # 마크다운을 HTML로 변환 후 텍스트 추출
+            html_content = markdown.markdown(
+                markdown_content,
+                extensions=['codehilite', 'fenced_code', 'tables', 'toc']
+            )
+            
+            # HTML에서 텍스트 추출
+            soup = BeautifulSoup(html_content, 'html.parser')
+            text_content = soup.get_text(separator='\n', strip=True)
+            
+            return await self.add_text_document(
+                content=text_content,
+                title=file_path.stem,
+                source_description=source_description,
+                chunk_size=chunk_size
+            )
+            
+        except Exception as e:
+            raise ValueError(f"Failed to process markdown file {file_path}: {e}")
+    
     async def _add_json_file(
         self,
         file_path: Path,
@@ -138,8 +178,9 @@ class DocumentProcessor:
     ) -> int:
         """Add JSON file to knowledge graph."""
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
+            async with aiofiles.open(file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                data = json.loads(content)
             
             return await self.add_json_data(
                 data=data,
@@ -193,7 +234,7 @@ class DocumentProcessor:
     async def bulk_process_directory(
         self,
         directory_path: Union[str, Path],
-        file_patterns: List[str] = ["*.txt", "*.json"],
+        file_patterns: List[str] = ["*.txt", "*.md", "*.json"],
         source_description: Optional[str] = None
     ) -> Dict[str, int]:
         """
@@ -227,3 +268,181 @@ class DocumentProcessor:
         logger.info(f"Bulk processing completed: {len(results)} files, {total_chunks} chunks")
         
         return results
+    
+    async def add_url_document(
+        self,
+        url: str,
+        title: Optional[str] = None,
+        source_description: str = "web_url",
+        chunk_size: int = 1000,
+        timeout: int = 30
+    ) -> int:
+        """
+        Add document from URL to knowledge graph.
+        URL에서 문서를 가져와 지식 그래프에 추가
+        """
+        if not self._is_valid_url(url):
+            raise ValueError(f"Invalid URL: {url}")
+        
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                logger.info(f"Fetching content from URL: {url}")
+                response = await client.get(
+                    url,
+                    headers={
+                        'User-Agent': 'RAG-Chatbot/1.0 (Document Processor)',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                    }
+                )
+                response.raise_for_status()
+                
+                # 컨텐츠 타입에 따른 처리
+                content_type = response.headers.get('content-type', '').lower()
+                
+                if 'text/html' in content_type:
+                    content = self._extract_text_from_html(response.text)
+                elif 'text/plain' in content_type:
+                    content = response.text
+                elif 'application/json' in content_type:
+                    # JSON 컨텐츠는 별도 처리
+                    json_data = response.json()
+                    return await self.add_json_data(
+                        data=json_data,
+                        title=title or self._extract_title_from_url(url),
+                        source_description=f"{source_description}_json"
+                    )
+                else:
+                    content = response.text
+                
+                if not title:
+                    title = self._extract_title_from_url(url)
+                
+                return await self.add_text_document(
+                    content=content,
+                    title=title,
+                    source_description=f"{source_description}_{url}",
+                    chunk_size=chunk_size
+                )
+                
+        except httpx.HTTPError as e:
+            logger.error(f"HTTP error fetching {url}: {e}")
+            raise ValueError(f"Failed to fetch URL {url}: {e}")
+        except Exception as e:
+            logger.error(f"Error processing URL {url}: {e}")
+            raise ValueError(f"Failed to process URL {url}: {e}")
+    
+    async def process_urls_file(
+        self,
+        urls_file_path: Union[str, Path],
+        source_description: str = "urls_file",
+        chunk_size: int = 1000,
+        timeout: int = 30
+    ) -> Dict[str, int]:
+        """
+        Process URLs from a text file.
+        텍스트 파일에서 URL들을 처리
+        """
+        urls_file_path = Path(urls_file_path)
+        
+        if not urls_file_path.exists():
+            raise FileNotFoundError(f"URLs file not found: {urls_file_path}")
+        
+        results = {}
+        
+        try:
+            async with aiofiles.open(urls_file_path, 'r', encoding='utf-8') as f:
+                content = await f.read()
+                
+            urls = self._parse_urls_from_content(content)
+            logger.info(f"Found {len(urls)} URLs to process from {urls_file_path}")
+            
+            for url in urls:
+                try:
+                    chunks_added = await self.add_url_document(
+                        url=url,
+                        source_description=source_description,
+                        chunk_size=chunk_size,
+                        timeout=timeout
+                    )
+                    results[url] = chunks_added
+                    logger.info(f"Successfully processed URL: {url} ({chunks_added} chunks)")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to process URL {url}: {e}")
+                    results[url] = 0
+            
+            total_chunks = sum(results.values())
+            logger.info(f"URL processing completed: {len(results)} URLs, {total_chunks} chunks")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error processing URLs file {urls_file_path}: {e}")
+            raise ValueError(f"Failed to process URLs file: {e}")
+    
+    def _is_valid_url(self, url: str) -> bool:
+        """
+        Validate URL format.
+        URL 형식 검증
+        """
+        try:
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
+    
+    def _extract_text_from_html(self, html_content: str) -> str:
+        """
+        Extract text content from HTML.
+        HTML에서 텍스트 컨텐츠 추출
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        # 마크업에서 제거할 요소들
+        for element in soup(['script', 'style', 'nav', 'footer', 'header', 'aside']):
+            element.decompose()
+        
+        # 텍스트 추출
+        text = soup.get_text(separator='\n', strip=True)
+        
+        # 비어있는 줄 정리
+        lines = [line.strip() for line in text.split('\n') if line.strip()]
+        return '\n'.join(lines)
+    
+    def _extract_title_from_url(self, url: str) -> str:
+        """
+        Extract title from URL.
+        URL에서 제목 추출
+        """
+        parsed_url = urlparse(url)
+        domain = parsed_url.netloc.replace('www.', '')
+        path = parsed_url.path.strip('/')
+        
+        if path:
+            # 마지막 경로 세그먼트를 제목으로 사용
+            title_part = path.split('/')[-1]
+            return f"{domain}_{title_part}"
+        else:
+            return f"{domain}_homepage"
+    
+    def _parse_urls_from_content(self, content: str) -> List[str]:
+        """
+        Parse URLs from text content, ignoring comments.
+        텍스트 컨텐츠에서 URL 파싱 (주석 제외)
+        """
+        urls = []
+        
+        for line in content.split('\n'):
+            line = line.strip()
+            
+            # 빈 줄이나 주석 제외
+            if not line or line.startswith('#'):
+                continue
+            
+            # URL 검증
+            if self._is_valid_url(line):
+                urls.append(line)
+            else:
+                logger.warning(f"Skipping invalid URL: {line}")
+        
+        return urls

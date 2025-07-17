@@ -432,5 +432,193 @@ def serve(ctx: click.Context, host: str, port: int, reload: bool) -> None:
         sys.exit(1)
 
 
+@main.command('add-url')
+@click.argument('url')
+@click.option('--title', help='Document title')
+@click.option('--source', default='web_url', help='Source description')
+@click.option('--chunk-size', default=1000, help='Chunk size for long documents')
+@click.option('--timeout', default=30, help='Request timeout in seconds')
+@click.pass_context
+def add_url(
+    ctx: click.Context,
+    url: str,
+    title: Optional[str],
+    source: str,
+    chunk_size: int,
+    timeout: int
+) -> None:
+    """
+    Add document from URL to knowledge graph.
+    URL에서 문서를 가져와 지식 그래프에 추가
+    """
+    settings = ctx.obj['settings']
+    
+    async def _add_url():
+        try:
+            service = await get_graphiti_service(settings)
+            processor = DocumentProcessor(service, settings)
+            
+            chunks = await processor.add_url_document(
+                url=url,
+                title=title,
+                source_description=source,
+                chunk_size=chunk_size,
+                timeout=timeout
+            )
+            console.print(f"[green]✓ Added URL document '{url}' ({chunks} chunks)[/green]")
+            
+        except Exception as e:
+            console.print(f"[red]✗ Failed to add URL: {e}[/red]")
+            sys.exit(1)
+        finally:
+            await close_graphiti_service()
+    
+    asyncio.run(_add_url())
+
+
+@main.command('import-urls')
+@click.argument('urls_file', type=click.Path(exists=True))
+@click.option('--source', default='urls_file', help='Source description')
+@click.option('--chunk-size', default=1000, help='Chunk size for long documents')
+@click.option('--timeout', default=30, help='Request timeout in seconds')
+@click.pass_context
+def import_urls(
+    ctx: click.Context,
+    urls_file: str,
+    source: str,
+    chunk_size: int,
+    timeout: int
+) -> None:
+    """
+    Import documents from URLs listed in a file.
+    파일에 나열된 URL들에서 문서를 가져와 추가
+    """
+    settings = ctx.obj['settings']
+    
+    async def _import_urls():
+        try:
+            service = await get_graphiti_service(settings)
+            processor = DocumentProcessor(service, settings)
+            
+            console.print(f"[blue]Processing URLs from: {urls_file}[/blue]")
+            
+            results = await processor.process_urls_file(
+                urls_file_path=urls_file,
+                source_description=source,
+                chunk_size=chunk_size,
+                timeout=timeout
+            )
+            
+            # 결과 표시
+            table = Table(title=f"URL Import Results")
+            table.add_column("URL", style="cyan")
+            table.add_column("Chunks", style="green")
+            table.add_column("Status", style="yellow")
+            
+            for url, chunks in results.items():
+                status = "✓ Success" if chunks > 0 else "✗ Failed"
+                table.add_row(url, str(chunks), status)
+            
+            console.print(table)
+            
+            total_chunks = sum(results.values())
+            successful = sum(1 for c in results.values() if c > 0)
+            console.print(f"[green]Processed {successful}/{len(results)} URLs successfully, {total_chunks} total chunks[/green]")
+            
+        except Exception as e:
+            console.print(f"[red]✗ Failed to import URLs: {e}[/red]")
+            sys.exit(1)
+        finally:
+            await close_graphiti_service()
+    
+    asyncio.run(_import_urls())
+
+
+@main.command('bulk-import')
+@click.argument('directory', type=click.Path(exists=True))
+@click.option('--patterns', default='*.txt,*.md,*.json', help='File patterns to process (comma-separated)')
+@click.option('--recursive', is_flag=True, help='Process directories recursively')
+@click.option('--source', default='bulk_import', help='Source description')
+@click.option('--chunk-size', default=1000, help='Chunk size for long documents')
+@click.pass_context
+def bulk_import(
+    ctx: click.Context,
+    directory: str,
+    patterns: str,
+    recursive: bool,
+    source: str,
+    chunk_size: int
+) -> None:
+    """
+    Bulk import documents from a directory.
+    디렉토리에서 문서를 대량으로 가져오기
+    """
+    settings = ctx.obj['settings']
+    
+    async def _bulk_import():
+        try:
+            service = await get_graphiti_service(settings)
+            processor = DocumentProcessor(service, settings)
+            
+            console.print(f"[blue]Processing directory: {directory}[/blue]")
+            
+            # 파일 패턴 파싱
+            file_patterns = [p.strip() for p in patterns.split(',')]
+            
+            from pathlib import Path
+            
+            results = {}
+            directory_path = Path(directory)
+            
+            # 재귀적 처리 지원
+            if recursive:
+                for pattern in file_patterns:
+                    for file_path in directory_path.rglob(pattern):
+                        if file_path.is_file():
+                            try:
+                                chunks = await processor.add_file_document(
+                                    file_path=file_path,
+                                    source_description=source,
+                                    chunk_size=chunk_size
+                                )
+                                results[str(file_path)] = chunks
+                            except Exception as e:
+                                logger.error(f"Failed to process file {file_path}: {e}")
+                                results[str(file_path)] = 0
+            else:
+                # 기존 bulk_process_directory 사용
+                results = await processor.bulk_process_directory(
+                    directory_path=directory_path,
+                    file_patterns=file_patterns,
+                    source_description=source
+                )
+            
+            # 결과 표시
+            table = Table(title=f"Bulk Import Results")
+            table.add_column("File", style="cyan")
+            table.add_column("Chunks", style="green")
+            table.add_column("Status", style="yellow")
+            
+            for file_path, chunks in results.items():
+                status = "✓ Success" if chunks > 0 else "✗ Failed"
+                # 파일 이름만 표시 (전체 경로 대신)
+                file_name = Path(file_path).name
+                table.add_row(file_name, str(chunks), status)
+            
+            console.print(table)
+            
+            total_chunks = sum(results.values())
+            successful = sum(1 for c in results.values() if c > 0)
+            console.print(f"[green]Processed {successful}/{len(results)} files successfully, {total_chunks} total chunks[/green]")
+            
+        except Exception as e:
+            console.print(f"[red]✗ Failed to bulk import: {e}[/red]")
+            sys.exit(1)
+        finally:
+            await close_graphiti_service()
+    
+    asyncio.run(_bulk_import())
+
+
 if __name__ == '__main__':
     main()
