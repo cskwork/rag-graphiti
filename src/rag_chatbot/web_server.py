@@ -9,7 +9,6 @@ from typing import Any, Dict
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
 
 from .chat_handler import ChatHandler
 from .config import Settings
@@ -300,8 +299,6 @@ def create_app(settings: Settings) -> FastAPI:
         version="0.1.0"
     )
     
-    # 템플릿 설정 (인메모리)
-    templates = Jinja2Templates(directory=".")
     
     # 전역 변수로 서비스 관리
     app.state.graphiti_service = None
@@ -328,15 +325,61 @@ def create_app(settings: Settings) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     async def chat_interface(request: Request):
         """Main chat interface."""
-        return HTMLResponse(
-            content=templates.get_template("dummy").render(
-                template=HTML_TEMPLATE,
-                conversation=app.state.conversation_history,
-                user_id="web_user",
-                status_message=None,
-                status_type=None
-            ).replace("{% extends 'dummy' %}", "").replace("{% block content %}{% endblock %}", HTML_TEMPLATE)
+        # 간단한 템플릿 변수 치환을 위한 문자열 렌더링
+        html_content = HTML_TEMPLATE
+        
+        # 상태 메시지 처리
+        status_section = ""
+        
+        # 대화 내용 렌더링
+        conversation_html = ""
+        if app.state.conversation_history:
+            for message in app.state.conversation_history:
+                role_class = "user-message" if message.get("role") == "user" else "assistant-message"
+                role_name = "You" if message.get("role") == "user" else "Assistant"
+                conversation_html += f'''
+                <div class="message {role_class}">
+                    <strong>{role_name}:</strong>
+                    {message.get("content", "")}
+                </div>'''
+        else:
+            conversation_html = '''
+            <div class="message assistant-message">
+                <strong>Assistant:</strong> 안녕하세요! 무엇을 도와드릴까요? 지식 베이스에서 정보를 검색해드립니다.
+            </div>'''
+        
+        # 템플릿 변수 치환
+        html_content = html_content.replace("{% if status_message %}", "")
+        html_content = html_content.replace("{% endif %}", "")
+        html_content = html_content.replace("{{ status_type }}", "")
+        html_content = html_content.replace("{{ status_message }}", "")
+        html_content = html_content.replace("{% if conversation %}", "")
+        html_content = html_content.replace("{% for message in conversation %}", "")
+        html_content = html_content.replace("{{ 'user-message' if message.role == 'user' else 'assistant-message' }}", "")
+        html_content = html_content.replace("{{ 'You' if message.role == 'user' else 'Assistant' }}", "")
+        html_content = html_content.replace("{{ message.content }}", "")
+        html_content = html_content.replace("{% endfor %}", "")
+        html_content = html_content.replace("{% else %}", "")
+        html_content = html_content.replace("{{ user_id }}", "web_user")
+        
+        # 대화 내용 삽입
+        html_content = html_content.replace(
+            '''            {% if conversation %}
+                {% for message in conversation %}
+                <div class="message {{ 'user-message' if message.role == 'user' else 'assistant-message' }}">
+                    <strong>{{ 'You' if message.role == 'user' else 'Assistant' }}:</strong>
+                    {{ message.content }}
+                </div>
+                {% endfor %}
+            {% else %}
+            <div class="message assistant-message">
+                <strong>Assistant:</strong> 안녕하세요! 무엇을 도와드릴까요? 지식 베이스에서 정보를 검색해드립니다.
+            </div>
+            {% endif %}''',
+            conversation_html
         )
+        
+        return HTMLResponse(content=html_content)
     
     @app.post("/", response_class=HTMLResponse)
     async def process_chat(request: Request, user_input: str = Form(...), user_id: str = Form("web_user")):
