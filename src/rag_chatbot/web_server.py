@@ -750,7 +750,7 @@ def get_falkordb_url(settings: Settings) -> str:
     Construct FalkorDB web interface URL.
     FalkorDB 웹 인터페이스 URL 생성
     """
-    return f"http://{settings.falkordb_host}:{settings.falkordb_port}"
+    return f"https://browser.falkordb.com/graph"#"http://{settings.falkordb_host}:{settings.falkordb_port}"
 
 
 def create_app(settings: Settings) -> FastAPI:
